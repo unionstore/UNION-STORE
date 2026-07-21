@@ -46,15 +46,16 @@
         window.appId = appId;
         
         // Uses environment config if available, otherwise initialized cleanly for production realtime sync
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            apiKey: "AIzaSyDummyKeyForUnionStoreRealtime",
-            authDomain: "union-store-rt.firebaseapp.com",
-            databaseURL: "https://union-store-rt-default-rtdb.firebaseio.com",
-            projectId: "union-store-rt",
-            storageBucket: "union-store-rt.appspot.com",
-            messagingSenderId: "123456789",
-            appId: "1:123456789:web:abcdef"
-        };
+        const firebaseConfig = {
+  apiKey: "AIzaSyDYoRm5kIpVw_3m_p5-1vMKF-43n9L_PVE",
+  authDomain: "union-cd417.firebaseapp.com",
+  databaseURL: "https://union-cd417-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "union-cd417",
+  storageBucket: "union-cd417.firebasestorage.app",
+  messagingSenderId: "989167269058",
+  appId: "1:989167269058:web:586c3dacb891f7d3caf75b",
+  measurementId: "G-Q25HH4RP9N"
+};
 
         try {
             const app = initializeApp(firebaseConfig);
