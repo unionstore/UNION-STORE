@@ -1,0 +1,1699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>UNION STORE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .fade-in { animation: fadeIn 0.25s ease-in-out; }
+        .slide-up { animation: slideUp 0.25s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { transform: translateY(15px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .hidden { display: none !important; }
+        
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        .modal-overlay { background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(4px); }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 h-screen w-screen overflow-hidden flex flex-col">
+
+    <div id="toast-container" class="fixed top-4 left-0 right-0 z-[100] flex flex-col items-center pointer-events-none gap-2 px-4"></div>
+    
+    <div id="app-container" class="w-full h-full flex flex-col relative overflow-hidden">
+        <div class="flex-1 flex flex-col items-center justify-center text-gray-400 text-xs space-y-2">
+            <i class="fas fa-spinner fa-spin text-2xl text-blue-500"></i>
+            <p>Connecting to Realtime Cloud Database...</p>
+        </div>
+    </div>
+
+    <!-- Firebase SDK Imports & Realtime Sync Engine -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getDatabase, ref, set, get, onValue, update, remove, push, child } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
+
+        window.firebaseModules = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken,
+            getDatabase, ref, set, get, onValue, update, remove, push, child
+        };
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'union-store-realtime-v1';
+        window.appId = appId;
+        
+        // Uses environment config if available, otherwise initialized cleanly for production realtime sync
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyDummyKeyForUnionStoreRealtime",
+            authDomain: "union-store-rt.firebaseapp.com",
+            databaseURL: "https://union-store-rt-default-rtdb.firebaseio.com",
+            projectId: "union-store-rt",
+            storageBucket: "union-store-rt.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef"
+        };
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const rtdb = getDatabase(app);
+            window.rtdb = rtdb;
+            window.auth = auth;
+
+            const initAuth = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (e) {
+                    console.warn("Auth warning, fallback active:", e);
+                }
+            };
+
+            initAuth().then(() => {
+                if (window.startRealtimeApp) window.startRealtimeApp();
+            }).catch(() => {
+                if (window.startFallbackApp) window.startFallbackApp();
+            });
+        } catch (err) {
+            console.warn("Firebase Realtime failed, running fallback storage:", err);
+            if (window.startFallbackApp) window.startFallbackApp();
+        }
+    </script>
+
+    <script>
+        let rtdb = null;
+        let auth = null;
+        let appId = 'union-store-realtime-v1';
+        let isCloudMode = false;
+        
+        let currentUser = JSON.parse(localStorage.getItem('union_current_user') || 'null');
+        let currentTab = 'store';
+        let selectedStoreCategory = null;
+        let currentCheckout = {};
+
+        // Complete Realtime Data Store Model
+        window.cloudData = {
+            settings: JSON.parse(localStorage.getItem('union_settings') || JSON.stringify({ upiId: '9279500979@fam' })),
+            users: JSON.parse(localStorage.getItem('union_users') || JSON.stringify([{ id: '1', username: 'ownerxunion', password: '@manxunion', role: 'owner', balance: 0 }])),
+            products: JSON.parse(localStorage.getItem('union_products') || JSON.stringify([
+                { id: 'p1', name: 'Reaper X Pro', category: 'android_root', plans: [
+                    { duration: '1 Day', price: 89, resellerPrice: 70, stock: 100 },
+                    { duration: '10 Days', price: 349, resellerPrice: 280, stock: 100 },
+                    { duration: '20 Days', price: 599, resellerPrice: 480, stock: 100 },
+                    { duration: '31 Days', price: 799, resellerPrice: 650, stock: 100 }
+                ]},
+                { id: 'p2', name: 'Drip Client', category: 'android_non_root', plans: [
+                    { duration: '1 Day', price: 79, resellerPrice: 60, stock: 100 },
+                    { duration: '3 Days', price: 179, resellerPrice: 140, stock: 100 },
+                    { duration: '7 Days', price: 349, resellerPrice: 280, stock: 100 },
+                    { duration: '15 Days', price: 599, resellerPrice: 480, stock: 100 },
+                    { duration: '30 Days', price: 899, resellerPrice: 700, stock: 100 }
+                ]},
+                { id: 'p3', name: 'MIGUL - Monite iOS [PRO]', category: 'ios', plans: [
+                    { duration: '1 Day', price: 299, resellerPrice: 250, stock: 100 },
+                    { duration: '7 Days', price: 899, resellerPrice: 750, stock: 100 },
+                    { duration: '31 Days', price: 1699, resellerPrice: 1400, stock: 100 }
+                ]}
+            ])),
+            orders: JSON.parse(localStorage.getItem('union_orders') || '[]'),
+            balance_reqs: JSON.parse(localStorage.getItem('union_balance_reqs') || '[]'),
+            announcements: JSON.parse(localStorage.getItem('union_announcements') || JSON.stringify([{ id: 'a1', text: 'Welcome to UNION STORE! Realtime cloud sync active.', date: new Date().toISOString() }])),
+            files: JSON.parse(localStorage.getItem('union_files') || JSON.stringify([{ id: 'f1', name: 'Reaper X Latest APK', version: 'v2.0', link: '#' }])),
+            coupons: JSON.parse(localStorage.getItem('union_coupons') || JSON.stringify([{ id: 'c1', code: 'WELCOME10', discount: 10 }])),
+            support: JSON.parse(localStorage.getItem('union_support') || JSON.stringify({ telegram: '@ownerxunion_support', whatsapp: '+919279500979', message: 'For quick support or custom panel solutions, contact us via Telegram or WhatsApp anytime.' }))
+        };
+
+        const saveToLocalStorage = () => {
+            localStorage.setItem('union_settings', JSON.stringify(window.cloudData.settings));
+            localStorage.setItem('union_users', JSON.stringify(window.cloudData.users));
+            localStorage.setItem('union_products', JSON.stringify(window.cloudData.products));
+            localStorage.setItem('union_orders', JSON.stringify(window.cloudData.orders));
+            localStorage.setItem('union_balance_reqs', JSON.stringify(window.cloudData.balance_reqs));
+            localStorage.setItem('union_announcements', JSON.stringify(window.cloudData.announcements));
+            localStorage.setItem('union_files', JSON.stringify(window.cloudData.files));
+            localStorage.setItem('union_coupons', JSON.stringify(window.cloudData.coupons));
+            localStorage.setItem('union_support', JSON.stringify(window.cloudData.support));
+        };
+
+        const showToast = (msg, type = 'info') => {
+            const container = document.getElementById('toast-container');
+            if(!container) return;
+            const toast = document.createElement('div');
+            const colorClass = type === 'success' ? 'bg-green-600 shadow-green-900/30' : type === 'error' ? 'bg-red-600 shadow-red-900/30' : 'bg-blue-600 shadow-blue-900/30';
+            toast.className = `${colorClass} text-white px-4 py-2.5 rounded-2xl shadow-xl text-xs font-bold slide-up flex items-center gap-2 border border-white/10`;
+            toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'times-circle' : 'info-circle'} text-sm"></i> ${msg}`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-15px)';
+                toast.style.transition = 'all 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        };
+
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+        const formatDate = (isoString) => new Date(isoString).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+        window.startFallbackApp = function() {
+            isCloudMode = false;
+            console.warn("Running UNION STORE in Local Memory Fallback Mode");
+            refreshUserData();
+            render();
+        };
+
+        window.startRealtimeApp = function() {
+            rtdb = window.rtdb;
+            auth = window.auth;
+            appId = window.appId;
+            const { ref, get, set, onValue } = window.firebaseModules;
+
+            const rootRef = ref(rtdb, 'artifacts/' + appId + '/store_data');
+
+            // Initial check & seed default database if empty
+            get(rootRef).then((snapshot) => {
+                if (!snapshot.exists()) {
+                    set(rootRef, window.cloudData).then(() => {
+                        console.log("Database seeded successfully");
+                    }).catch(err => console.warn("Seed error:", err));
+                }
+            }).catch(err => console.warn("Read error:", err));
+
+            // Real-time synchronization listener for all nodes
+            onValue(rootRef, (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    window.cloudData = {
+                        settings: data.settings || window.cloudData.settings,
+                        users: data.users || window.cloudData.users,
+                        products: data.products || window.cloudData.products,
+                        orders: data.orders ? Object.values(data.orders) : [],
+                        balance_reqs: data.balance_reqs ? Object.values(data.balance_reqs) : [],
+                        announcements: data.announcements ? Object.values(data.announcements) : [],
+                        files: data.files ? Object.values(data.files) : [],
+                        coupons: data.coupons ? Object.values(data.coupons) : [],
+                        support: data.support || window.cloudData.support
+                    };
+                    saveToLocalStorage();
+                    isCloudMode = true;
+                    refreshUserData();
+                    render();
+                }
+            }, (error) => {
+                console.warn("Realtime listener error, switching to fallback:", error);
+                window.startFallbackApp();
+            });
+        };
+
+        // Realtime Cloud Operations Engine
+        const CloudDB = {
+            getSettings: () => window.cloudData.settings,
+            updateSettings: async (settings) => {
+                window.cloudData.settings = settings;
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/settings'), settings);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getUsers: () => window.cloudData.users,
+            updateUsers: async (usersList) => {
+                window.cloudData.users = usersList;
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/users'), usersList);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getProducts: () => window.cloudData.products,
+            updateProducts: async (prodsList) => {
+                window.cloudData.products = prodsList;
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/products'), prodsList);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getOrders: () => window.cloudData.orders,
+            addOrder: async (order) => {
+                window.cloudData.orders.push(order);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/orders/' + order.id), order);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            updateOrder: async (id, updatedFields) => {
+                const o = window.cloudData.orders.find(x => x.id === id);
+                if(o) Object.assign(o, updatedFields);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, update } = window.firebaseModules;
+                        await update(ref(rtdb, 'artifacts/' + appId + '/store_data/orders/' + id), updatedFields);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getBalanceReqs: () => window.cloudData.balance_reqs,
+            addBalanceReq: async (req) => {
+                window.cloudData.balance_reqs.push(req);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/balance_reqs/' + req.id), req);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            updateBalanceReq: async (id, updatedFields) => {
+                const r = window.cloudData.balance_reqs.find(x => x.id === id);
+                if(r) Object.assign(r, updatedFields);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, update } = window.firebaseModules;
+                        await update(ref(rtdb, 'artifacts/' + appId + '/store_data/balance_reqs/' + id), updatedFields);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getAnnouncements: () => window.cloudData.announcements,
+            addAnnouncement: async (ann) => {
+                window.cloudData.announcements.unshift(ann);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/announcements/' + ann.id), ann);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            deleteAnnouncement: async (id) => {
+                window.cloudData.announcements = window.cloudData.announcements.filter(x => x.id !== id);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, remove } = window.firebaseModules;
+                        await remove(ref(rtdb, 'artifacts/' + appId + '/store_data/announcements/' + id));
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getFiles: () => window.cloudData.files,
+            addFile: async (file) => {
+                window.cloudData.files.unshift(file);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/files/' + file.id), file);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            deleteFile: async (id) => {
+                window.cloudData.files = window.cloudData.files.filter(x => x.id !== id);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, remove } = window.firebaseModules;
+                        await remove(ref(rtdb, 'artifacts/' + appId + '/store_data/files/' + id));
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getCoupons: () => window.cloudData.coupons,
+            addCoupon: async (coup) => {
+                window.cloudData.coupons.push(coup);
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/coupons/' + coup.id), coup);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            },
+            getSupport: () => window.cloudData.support,
+            updateSupport: async (sup) => {
+                window.cloudData.support = sup;
+                saveToLocalStorage();
+                if(isCloudMode && rtdb) {
+                    try {
+                        const { ref, set } = window.firebaseModules;
+                        await set(ref(rtdb, 'artifacts/' + appId + '/store_data/support'), sup);
+                    } catch(e) { console.warn("Sync failed:", e); }
+                }
+            }
+        };
+
+        const refreshUserData = () => {
+            if(!currentUser) return;
+            const users = CloudDB.getUsers();
+            const fresh = users.find(u => u.id === currentUser.id);
+            if(fresh) {
+                currentUser = fresh;
+                localStorage.setItem('union_current_user', JSON.stringify(currentUser));
+            }
+        };
+
+        const setTab = (tab) => {
+            currentTab = tab;
+            render();
+        };
+
+        const openModal = (htmlContent) => {
+            closeModal();
+            const modal = document.createElement('div');
+            modal.id = 'dynamic-modal';
+            modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4 fade-in';
+            modal.innerHTML = `
+                <div class="absolute inset-0 modal-overlay" onclick="closeModal()"></div>
+                <div class="bg-gray-900 border border-gray-700/85 rounded-3xl shadow-2xl w-full max-w-md relative z-10 slide-up max-h-[85vh] overflow-y-auto overflow-x-hidden">
+                    ${htmlContent}
+                </div>
+            `;
+            document.body.appendChild(modal);
+        };
+
+        const closeModal = () => {
+            const modal = document.getElementById('dynamic-modal');
+            if(modal) modal.remove();
+        };
+
+        const login = (e) => {
+            e.preventDefault();
+            const u = document.getElementById('login-user').value.trim();
+            const p = document.getElementById('login-pass').value.trim();
+            const users = CloudDB.getUsers();
+            const user = users.find(x => x.username === u && x.password === p);
+            if (user) {
+                currentUser = user;
+                localStorage.setItem('union_current_user', JSON.stringify(user));
+                showToast('Welcome back, ' + user.username + '!', 'success');
+                currentTab = 'store';
+                render();
+            } else {
+                showToast('Invalid Username or Password', 'error');
+            }
+        };
+
+        const register = async (e) => {
+            e.preventDefault();
+            const u = document.getElementById('reg-user').value.trim();
+            const p = document.getElementById('reg-pass').value.trim();
+            if(!u || !p) return showToast('Please enter username & password', 'error');
+            
+            const users = CloudDB.getUsers();
+            if(users.find(x => x.username.toLowerCase() === u.toLowerCase())) {
+                return showToast('Username already exists', 'error');
+            }
+            
+            const newUser = { id: generateId(), username: u, password: p, role: 'buyer', balance: 0 };
+            users.push(newUser);
+            await CloudDB.updateUsers(users);
+            currentUser = newUser;
+            localStorage.setItem('union_current_user', JSON.stringify(newUser));
+            showToast('Account Created Successfully!', 'success');
+            currentTab = 'store';
+            render();
+        };
+
+        const logout = () => {
+            currentUser = null;
+            localStorage.removeItem('union_current_user');
+            currentTab = 'store';
+            render();
+        };
+
+        const showForgotPasswordModal = () => {
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm"><i class="fas fa-key text-blue-400 mr-2"></i> Reset Account Password</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <p class="text-[11px] text-gray-400 leading-relaxed">Enter your registered username and your new password to update cloud credentials.</p>
+                    <div>
+                        <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Username</label>
+                        <input type="text" id="fp-user" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:border-blue-500 focus:outline-none text-xs" placeholder="Your username">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">New Password</label>
+                        <input type="password" id="fp-newpass" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:border-blue-500 focus:outline-none text-xs" placeholder="New secure password">
+                    </div>
+                    <button onclick="resetPassword()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg active:scale-95 transition-transform text-xs uppercase tracking-wider">Update Password</button>
+                </div>
+            `);
+        };
+
+        const resetPassword = async () => {
+            const u = document.getElementById('fp-user').value.trim();
+            const p = document.getElementById('fp-newpass').value.trim();
+            if(!u || !p) return showToast('Please fill all fields', 'error');
+
+            const users = CloudDB.getUsers();
+            const idx = users.findIndex(x => x.username === u);
+            if(idx === -1) return showToast('Username not found', 'error');
+
+            users[idx].password = p;
+            await CloudDB.updateUsers(users);
+            closeModal();
+            showToast('Password updated! Please login.', 'success');
+        };
+
+        const renderStore = () => {
+            const products = CloudDB.getProducts();
+            const getIcon = (cat) => {
+                if(cat.includes('root')) return '<i class="fab fa-android text-green-500"></i>';
+                if(cat === 'ios') return '<i class="fab fa-apple text-gray-200"></i>';
+                return '<i class="fas fa-key text-blue-400"></i>';
+            };
+
+            if (!selectedStoreCategory) {
+                return `
+                <div class="space-y-6 fade-in pb-24 max-w-xl mx-auto pt-2">
+                    <div class="text-center space-y-1">
+                        <h2 class="text-2xl font-black text-white tracking-wide">UNION STORE</h2>
+                        <p class="text-xs text-gray-400">Select your required panel category to explore live cloud licenses</p>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-3.5 pt-2">
+                        <div onclick="setStoreCategory('android_root')" class="bg-gray-900 border border-gray-800 hover:border-green-500 p-5 rounded-3xl flex items-center justify-between cursor-pointer transition-all group shadow-lg">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 rounded-2xl bg-green-900/20 border border-green-800/60 flex items-center justify-center text-green-400 text-xl group-hover:scale-110 transition-transform">
+                                    <i class="fab fa-android"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-base font-bold text-white group-hover:text-green-400 transition-colors">Root Panel</h3>
+                                    <p class="text-[11px] text-gray-400 mt-0.5">High-performance root licenses & cheats</p>
+                                </div>
+                            </div>
+                            <div class="w-9 h-9 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 group-hover:bg-green-600 group-hover:text-white transition-all text-xs">
+                                <i class="fas fa-arrow-right"></i>
+                            </div>
+                        </div>
+
+                        <div onclick="setStoreCategory('android_non_root')" class="bg-gray-900 border border-gray-800 hover:border-blue-500 p-5 rounded-3xl flex items-center justify-between cursor-pointer transition-all group shadow-lg">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 rounded-2xl bg-blue-900/20 border border-blue-800/60 flex items-center justify-center text-blue-400 text-xl group-hover:scale-110 transition-transform">
+                                    <i class="fab fa-android"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-base font-bold text-white group-hover:text-blue-400 transition-colors">Non Root Panel</h3>
+                                    <p class="text-[11px] text-gray-400 mt-0.5">Safe non-root client tools and licenses</p>
+                                </div>
+                            </div>
+                            <div class="w-9 h-9 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 group-hover:bg-blue-600 group-hover:text-white transition-all text-xs">
+                                <i class="fas fa-arrow-right"></i>
+                            </div>
+                        </div>
+
+                        <div onclick="setStoreCategory('ios')" class="bg-gray-900 border border-gray-800 hover:border-purple-500 p-5 rounded-3xl flex items-center justify-between cursor-pointer transition-all group shadow-lg">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 rounded-2xl bg-purple-900/20 border border-purple-800/60 flex items-center justify-center text-purple-400 text-xl group-hover:scale-110 transition-transform">
+                                    <i class="fab fa-apple"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-base font-bold text-white group-hover:text-purple-400 transition-colors">IOS Panel</h3>
+                                    <p class="text-[11px] text-gray-400 mt-0.5">Monite & iOS pro device licenses</p>
+                                </div>
+                            </div>
+                            <div class="w-9 h-9 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 group-hover:bg-purple-600 group-hover:text-white transition-all text-xs">
+                                <i class="fas fa-arrow-right"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            const filteredProducts = products.filter(p => p.category === selectedStoreCategory);
+            const categoryTitle = selectedStoreCategory === 'android_root' ? 'Root Panel Products' :
+                                  selectedStoreCategory === 'android_non_root' ? 'Non Root Panel Products' : 'IOS Panel Products';
+
+            let html = `<div class="space-y-4 fade-in pb-24 max-w-2xl mx-auto">
+                <div class="flex items-center justify-between px-1">
+                    <div>
+                        <button onclick="setStoreCategory(null)" class="text-xs text-blue-400 font-bold hover:underline mb-1 flex items-center gap-1.5">
+                            <i class="fas fa-arrow-left"></i> Back to Categories
+                        </button>
+                        <h2 class="text-xl font-bold text-white">${categoryTitle}</h2>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4">
+            `;
+
+            if (filteredProducts.length === 0) {
+                html += `<div class="text-center py-12 bg-gray-900 border border-gray-800 rounded-2xl text-gray-500 text-xs">No products found in this category.</div>`;
+            }
+
+            filteredProducts.forEach(p => {
+                html += `
+                    <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-lg">
+                        <div class="p-4 border-b border-gray-800 bg-gray-900 flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center text-lg shadow-inner border border-gray-700">
+                                ${getIcon(p.category)}
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-white text-sm leading-tight">${p.name}</h3>
+                                <p class="text-[9px] uppercase text-gray-500 font-bold tracking-wider">${p.category.replace(/_/g, ' ')}</p>
+                            </div>
+                        </div>
+                        <div class="p-4 space-y-2">
+                            ${p.plans.map((plan, idx) => {
+                                const displayPrice = currentUser && currentUser.role === 'reseller' ? plan.resellerPrice : plan.price;
+                                const originalPriceHtml = currentUser && currentUser.role === 'reseller' ? `<span class="text-[10px] line-through text-gray-500 mr-1.5 font-normal">₹${plan.price}</span>` : '';
+                                
+                                return `
+                                <div class="flex justify-between items-center py-2 border-b border-gray-800/60 last:border-0">
+                                    <div>
+                                        <span class="text-xs font-bold text-gray-200 block">${plan.duration}</span>
+                                        <span class="text-[10px] ${plan.stock > 0 ? 'text-green-500' : 'text-red-500'} font-semibold">Stock: ${plan.stock > 0 ? 'Available' : 'Out of Stock'}</span>
+                                    </div>
+                                    <div class="text-right flex items-center gap-3">
+                                        <div>
+                                            <div class="font-black text-sm text-white">${originalPriceHtml}₹${displayPrice}</div>
+                                        </div>
+                                        <button onclick='openCheckout(${JSON.stringify(p).replace(/'/g, "&#39;")}, ${idx})' ${plan.stock <= 0 ? 'disabled' : ''} class="text-[10px] uppercase font-bold bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 text-white px-3.5 py-2 rounded-xl active:scale-95 transition-all shadow-md">Buy</button>
+                                    </div>
+                                </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += `</div></div>`;
+            return html;
+        };
+
+        const setStoreCategory = (cat) => {
+            selectedStoreCategory = cat;
+            render();
+        };
+
+        const openCheckout = (product, planIndex) => {
+            if(!currentUser) return showToast('Please login first', 'error');
+            const plan = product.plans[planIndex];
+            const basePrice = currentUser.role === 'reseller' ? plan.resellerPrice : plan.price;
+            currentCheckout = { product, plan, basePrice, finalPrice: basePrice, discount: 0, method: 'balance', utr: '' };
+            renderCheckoutModal();
+        };
+
+        const renderCheckoutModal = () => {
+            const settings = CloudDB.getSettings();
+            const { product, plan, finalPrice, discount, method } = currentCheckout;
+            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=upi://pay?pa=${settings.upiId}&pn=UNION%20STORE&am=${finalPrice}&cu=INR`;
+
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm truncate pr-2">Checkout: ${product.name}</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div class="bg-gray-950 rounded-2xl p-4 border border-gray-800 shadow-inner space-y-2">
+                        <div class="flex justify-between text-xs">
+                            <span class="text-gray-400">Plan Duration:</span>
+                            <span class="text-white font-bold">${plan.duration}</span>
+                        </div>
+                        <div class="flex justify-between text-xs">
+                            <span class="text-gray-400">Base Price:</span>
+                            <span class="text-white font-bold">₹${currentCheckout.basePrice}</span>
+                        </div>
+                        ${discount > 0 ? `
+                        <div class="flex justify-between text-xs text-green-400">
+                            <span>Coupon Discount:</span>
+                            <span class="font-bold">-₹${discount}</span>
+                        </div>` : ''}
+                        <div class="border-t border-gray-800 pt-2 flex justify-between text-base">
+                            <span class="text-gray-300 font-bold">Total Payable:</span>
+                            <span class="text-blue-400 font-black">₹${finalPrice}</span>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2">
+                        <input type="text" id="coupon-input" class="flex-1 bg-gray-950 border border-gray-800 rounded-xl px-3.5 py-2.5 text-xs text-white uppercase focus:border-blue-500 focus:outline-none font-bold" placeholder="Promo Code">
+                        <button onclick="applyCoupon()" class="bg-gray-800 border border-gray-700 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-gray-700">Apply</button>
+                    </div>
+
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Select Payment Method</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button onclick="currentCheckout.method='balance'; renderCheckoutModal();" class="p-3.5 rounded-2xl border ${method === 'balance' ? 'border-blue-500 bg-blue-900/20 text-blue-400' : 'border-gray-800 bg-gray-950 text-gray-400'} flex flex-col items-center justify-center transition-all">
+                                <i class="fas fa-wallet text-lg mb-1"></i>
+                                <span class="text-xs font-bold">Wallet</span>
+                                <span class="text-[9px] mt-0.5 opacity-80">(Bal: ₹${currentUser.balance})</span>
+                            </button>
+                            <button onclick="currentCheckout.method='upi'; renderCheckoutModal();" class="p-3.5 rounded-2xl border ${method === 'upi' ? 'border-purple-500 bg-purple-900/20 text-purple-400' : 'border-gray-800 bg-gray-950 text-gray-400'} flex flex-col items-center justify-center transition-all">
+                                <i class="fas fa-qrcode text-lg mb-1"></i>
+                                <span class="text-xs font-bold">Direct UPI</span>
+                                <span class="text-[9px] mt-0.5 opacity-80">(Manual Approval)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    ${method === 'upi' ? `
+                        <div class="bg-gray-950 border border-gray-800 p-4 rounded-2xl text-center space-y-3">
+                            <p class="text-[11px] text-gray-400">Scan QR to pay exact <b class="text-white">₹${finalPrice}</b></p>
+                            <img src="${qrUrl}" alt="QR" class="mx-auto w-32 h-32 bg-white p-1 rounded-xl shadow-md">
+                            <div class="flex justify-between items-center bg-gray-900 p-2.5 rounded-xl border border-gray-800">
+                                <span class="font-mono text-white text-xs">${settings.upiId}</span>
+                                <button onclick="document.execCommand('copy'); navigator.clipboard.writeText('${settings.upiId}'); showToast('UPI ID Copied!', 'success');" class="text-blue-400 text-[10px] font-bold uppercase"><i class="fas fa-copy mr-1"></i> Copy</button>
+                            </div>
+                            <input type="text" id="checkout-utr" class="w-full bg-gray-900 border border-gray-800 rounded-xl px-3.5 py-2.5 text-xs text-white text-center focus:border-purple-500 focus:outline-none" placeholder="Enter 12-Digit UTR Number">
+                        </div>
+                    ` : ''}
+
+                    <button onclick="confirmPurchase()" class="w-full ${method === 'balance' ? 'bg-blue-600 shadow-blue-900/20 hover:bg-blue-500' : 'bg-purple-600 shadow-purple-900/20 hover:bg-purple-500'} text-white font-bold py-3.5 rounded-xl shadow-lg active:scale-95 transition-all text-xs uppercase tracking-wider">
+                        Pay ₹${finalPrice} Now
+                    </button>
+                </div>
+            `);
+        };
+
+        const applyCoupon = () => {
+            const codeInput = document.getElementById('coupon-input');
+            if(!codeInput) return;
+            const code = codeInput.value.trim().toUpperCase();
+            if(!code) return;
+            const coupons = CloudDB.getCoupons();
+            const coupon = coupons.find(c => c.code === code);
+            
+            if(coupon) {
+                const discountAmt = Math.round(currentCheckout.basePrice * (coupon.discount / 100));
+                currentCheckout.discount = discountAmt;
+                currentCheckout.finalPrice = Math.max(0, currentCheckout.basePrice - discountAmt);
+                showToast(`Coupon applied! ${coupon.discount}% off`, 'success');
+                renderCheckoutModal();
+            } else {
+                showToast('Invalid Coupon Code', 'error');
+            }
+        };
+
+        const confirmPurchase = async () => {
+            const { product, plan, finalPrice, method, basePrice } = currentCheckout;
+            const buyerPriceOriginal = plan.price;
+            
+            let utr = '';
+            if (method === 'upi') {
+                const utrInput = document.getElementById('checkout-utr');
+                utr = utrInput ? utrInput.value.trim() : '';
+                if(!utr || utr.length < 8) return showToast('Please enter a valid UTR number', 'error');
+            } else if (method === 'balance') {
+                if(currentUser.balance < finalPrice) return showToast('Insufficient Wallet Balance', 'error');
+            }
+
+            const products = CloudDB.getProducts();
+            const pIdx = products.findIndex(p => p.id === product.id);
+            if(pIdx === -1) return showToast('Product not found', 'error');
+            const planIdx = products[pIdx].plans.findIndex(pl => pl.duration === plan.duration);
+            if(planIdx === -1) return showToast('Plan not found', 'error');
+            
+            if (products[pIdx].plans[planIdx].stock <= 0) {
+                return showToast('Selected plan is currently out of stock!', 'error');
+            }
+
+            const newOrder = {
+                id: generateId(),
+                userId: currentUser.id,
+                username: currentUser.username,
+                roleAtPurchase: currentUser.role,
+                productName: product.name,
+                plan: plan.duration,
+                price: finalPrice,
+                originalPrice: buyerPriceOriginal,
+                method,
+                utr,
+                status: 'pending',
+                key: 'Waiting for Owner Approval & Key Delivery',
+                date: new Date().toISOString()
+            };
+
+            if(method === 'balance') {
+                const users = CloudDB.getUsers();
+                const uIdx = users.findIndex(u => u.id === currentUser.id);
+                if(uIdx > -1) {
+                    users[uIdx].balance -= finalPrice;
+                    await CloudDB.updateUsers(users);
+                    refreshUserData();
+                }
+            }
+
+            products[pIdx].plans[planIdx].stock -= 1;
+            await CloudDB.updateProducts(products);
+            await CloudDB.addOrder(newOrder);
+
+            closeModal();
+            showToast('Order placed successfully! Waiting for owner review & key delivery.', 'success');
+            render();
+        };
+
+        const renderHistory = () => {
+            let orders = CloudDB.getOrders();
+            if(currentUser.role !== 'owner') {
+                orders = orders.filter(o => o.userId === currentUser.id);
+            }
+            orders = [...orders].reverse();
+
+            let html = `<div class="space-y-4 fade-in pb-24 max-w-2xl mx-auto">
+                <h2 class="text-xl font-bold text-white px-1">Purchase History</h2>
+                ${orders.length === 0 ? `
+                    <div class="text-center py-14 bg-gray-900 border border-gray-800 rounded-2xl">
+                        <i class="fas fa-file-invoice text-gray-600 text-4xl mb-3"></i>
+                        <p class="text-gray-500 text-xs">No purchase history found.</p>
+                    </div>
+                ` : orders.map(o => {
+                    const isApproved = o.status === 'approved';
+                    let profitHtml = '';
+                    if (o.roleAtPurchase === 'reseller' && isApproved && o.originalPrice) {
+                        const profit = o.originalPrice - o.price;
+                        if(profit > 0) {
+                            profitHtml = `<div class="text-[10px] text-green-400 font-bold bg-green-900/20 px-2.5 py-1 rounded-lg inline-block mt-2 border border-green-800/40">Reseller Profit Made: ₹${profit}</div>`;
+                        }
+                    }
+
+                    return `
+                    <div class="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm relative overflow-hidden">
+                        <div class="z-10 space-y-1">
+                            <div class="flex items-center gap-2">
+                                <h4 class="font-bold text-white text-sm">${o.productName}</h4>
+                                <span class="text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${isApproved ? 'bg-green-900 text-green-400 border border-green-800' : 'bg-yellow-900 text-yellow-400 border border-yellow-800'}">${o.status}</span>
+                            </div>
+                            <p class="text-xs text-gray-300 font-medium">${o.plan} • ₹${o.price} • Via ${o.method.toUpperCase()}</p>
+                            <p class="text-[10px] text-gray-500">${formatDate(o.date)}</p>
+                            ${currentUser.role === 'owner' ? `<p class="text-[10px] text-blue-400 font-bold">User: ${o.username} (${o.roleAtPurchase}) ${o.method==='upi'? `| UTR: ${o.utr}` : ''}</p>` : ''}
+                            ${profitHtml}
+                        </div>
+                        
+                        <div class="bg-gray-950 border border-gray-800 p-3 rounded-xl text-center md:min-w-[210px] z-10">
+                            <p class="text-[9px] text-gray-500 uppercase tracking-widest mb-1 font-bold">License Key</p>
+                            <div class="font-mono text-xs font-bold break-all ${isApproved ? 'text-green-400 selection:bg-green-900' : 'text-gray-500'} cursor-text">
+                                ${o.key}
+                            </div>
+                        </div>
+                    </div>
+                `}).join('')}
+            </div>`;
+            return html;
+        };
+
+        const renderFiles = () => {
+            const files = CloudDB.getFiles();
+            return `
+            <div class="space-y-4 fade-in pb-24 max-w-2xl mx-auto">
+                <div class="bg-blue-900/20 border border-blue-900/60 p-4 rounded-2xl flex gap-3 shadow-inner">
+                    <i class="fas fa-info-circle text-blue-400 mt-0.5 text-sm"></i>
+                    <p class="text-xs text-blue-200 leading-relaxed">Download updated APKs and configs here. Keep apps updated to prevent bans or connection errors.</p>
+                </div>
+                <div class="grid gap-3">
+                    ${files.length === 0 ? '<p class="text-xs text-gray-500 text-center py-8">No files published yet.</p>' :
+                      files.map(f => `
+                        <div class="bg-gray-900 border border-gray-800 p-4 rounded-2xl flex items-center justify-between shadow-md">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center text-blue-400 border border-gray-700">
+                                    <i class="fas fa-file-download text-sm"></i>
+                                </div>
+                                <div>
+                                    <h4 class="font-bold text-white text-xs">${f.name}</h4>
+                                    <p class="text-[10px] text-gray-500 font-mono mt-0.5">Version: ${f.version}</p>
+                                </div>
+                            </div>
+                            <a href="${f.link}" target="_blank" class="w-10 h-10 bg-blue-600 hover:bg-blue-500 text-white rounded-xl flex items-center justify-center transition-colors shadow-lg shadow-blue-900/20">
+                                <i class="fas fa-arrow-down text-xs"></i>
+                            </a>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`;
+        };
+
+        const renderAccount = () => {
+            const announcements = CloudDB.getAnnouncements();
+            const support = CloudDB.getSupport();
+
+            let html = `
+                <div class="space-y-6 fade-in pb-24 max-w-2xl mx-auto">
+                    <div class="bg-gradient-to-br from-blue-950 via-gray-900 to-gray-900 rounded-3xl p-6 shadow-xl border border-blue-900/40 relative overflow-hidden">
+                        <i class="fas fa-crown absolute -right-4 -top-4 text-blue-500/10 text-8xl"></i>
+                        <h2 class="text-2xl font-black text-white mb-1">Hi, ${currentUser.username}!</h2>
+                        <p class="text-xs text-blue-300 mb-5 capitalize font-semibold tracking-wider">Role: ${currentUser.role}</p>
+                        
+                        <div class="bg-gray-950/70 backdrop-blur rounded-2xl p-4 inline-block border border-gray-800 shadow-inner">
+                            <p class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Wallet Balance</p>
+                            <h1 class="text-3xl font-black text-white mt-0.5">₹${currentUser.balance}</h1>
+                        </div>
+                        
+                        <div class="mt-5 flex flex-wrap gap-2.5">
+                            <button onclick="showAddBalanceModal()" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2.5 rounded-xl font-bold shadow-lg shadow-green-900/20 active:scale-95 transition-all text-xs">
+                                <i class="fas fa-wallet mr-1.5"></i> Add Balance
+                            </button>
+                            ${currentUser.role === 'owner' ? `
+                            <button onclick="setTab('admin')" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold shadow-lg active:scale-95 transition-all text-xs">
+                                <i class="fas fa-shield-alt mr-1.5"></i> Admin Dashboard
+                            </button>` : ''}
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-sm font-bold text-white mb-3 flex items-center px-1"><i class="fas fa-bullhorn text-yellow-500 mr-2"></i> Announcements</h3>
+                        <div class="space-y-2.5">
+                            ${announcements.length === 0 ? '<p class="text-gray-500 text-xs text-center py-4 bg-gray-900 rounded-2xl border border-gray-800">No announcements</p>' : 
+                              announcements.map(a => `
+                                <div class="bg-gray-900 border border-gray-800 p-4 rounded-2xl shadow-sm">
+                                    <div class="flex justify-between items-center mb-1.5">
+                                        <span class="text-[9px] bg-blue-900/40 text-blue-400 px-2 py-0.5 rounded uppercase font-bold border border-blue-800/50">Update</span>
+                                        <span class="text-[10px] text-gray-500">${formatDate(a.date)}</span>
+                                    </div>
+                                    <p class="text-xs text-gray-300 leading-relaxed">${a.text}</p>
+                                </div>
+                              `).join('')}
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-sm font-bold text-white mb-3 flex items-center px-1"><i class="fas fa-headset text-green-500 mr-2"></i> Support & Contact</h3>
+                        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-sm relative overflow-hidden space-y-4">
+                            <p class="text-xs text-gray-300 leading-relaxed relative z-10">${support.message}</p>
+                            <div class="flex flex-col gap-2.5 relative z-10">
+                                <a href="https://t.me/${support.telegram.replace('@', '')}" target="_blank" class="flex items-center justify-between bg-gray-950 border border-gray-800 p-3.5 rounded-xl hover:border-blue-500 transition-colors group">
+                                    <div class="flex items-center gap-3">
+                                        <i class="fab fa-telegram text-blue-500 text-lg"></i>
+                                        <span class="text-xs font-bold text-white">Telegram Support</span>
+                                    </div>
+                                    <span class="text-[10px] text-gray-400 group-hover:text-blue-400 bg-gray-900 px-2 py-1 rounded font-medium">${support.telegram}</span>
+                                </a>
+                                <a href="https://wa.me/${support.whatsapp.replace(/[^0-9]/g, '')}" target="_blank" class="flex items-center justify-between bg-gray-950 border border-gray-800 p-3.5 rounded-xl hover:border-green-500 transition-colors group">
+                                    <div class="flex items-center gap-3">
+                                        <i class="fab fa-whatsapp text-green-500 text-lg"></i>
+                                        <span class="text-xs font-bold text-white">WhatsApp Chat</span>
+                                    </div>
+                                    <span class="text-[10px] text-gray-400 group-hover:text-green-400 bg-gray-900 px-2 py-1 rounded font-medium">${support.whatsapp}</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pt-2">
+                        <button onclick="logout()" class="w-full bg-red-600/15 border border-red-500/30 hover:bg-red-600 text-red-400 hover:text-white font-bold py-3.5 rounded-2xl transition-all flex items-center justify-center gap-2 text-xs shadow-lg">
+                            <i class="fas fa-sign-out-alt"></i> Logout from Account
+                        </button>
+                    </div>
+                </div>
+            `;
+            return html;
+        };
+
+        const showAddBalanceModal = () => {
+            const settings = CloudDB.getSettings();
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-sm text-white">Add Wallet Balance via UPI</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div class="bg-blue-900/20 border border-blue-800/60 p-4 rounded-2xl">
+                        <p class="text-[11px] text-blue-200 mb-2">Pay on this UPI ID and submit your UTR for owner approval. Minimum is ₹10.</p>
+                        <div class="flex justify-between items-center bg-gray-950 p-3 rounded-xl border border-gray-800">
+                            <span class="font-mono text-white text-xs" id="copy-upi">${settings.upiId}</span>
+                            <button onclick="document.execCommand('copy'); navigator.clipboard.writeText('${settings.upiId}'); showToast('UPI Copied!', 'success');" class="text-blue-400 text-[10px] font-bold uppercase"><i class="fas fa-copy mr-1"></i> Copy</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Amount Paid (₹)</label>
+                        <input type="number" id="add-amt" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:border-blue-500 focus:outline-none text-xs" placeholder="e.g. 500">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">12-Digit UTR / Ref Number</label>
+                        <input type="text" id="add-utr" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:border-blue-500 focus:outline-none text-xs" placeholder="e.g. 312345678901">
+                    </div>
+                    <button onclick="submitBalanceReq()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg active:scale-95 transition-transform text-xs uppercase tracking-wider">Submit Request for Approval</button>
+                </div>
+            `);
+        };
+
+        const submitBalanceReq = async () => {
+            const amtInput = document.getElementById('add-amt');
+            const utrInput = document.getElementById('add-utr');
+            if(!amtInput || !utrInput) return;
+            const amt = parseInt(amtInput.value);
+            const utr = utrInput.value.trim();
+            if(!amt || amt < 10) return showToast('Enter valid amount (Min 10)', 'error');
+            if(!utr || utr.length < 8) return showToast('Enter valid UTR', 'error');
+
+            const newReq = { id: generateId(), userId: currentUser.id, username: currentUser.username, amount: amt, utr, status: 'pending', date: new Date().toISOString() };
+            await CloudDB.addBalanceReq(newReq);
+            closeModal();
+            showToast('Balance request sent to owner for approval!', 'success');
+        };
+
+        const renderAdmin = () => {
+            if(!currentUser || currentUser.role !== 'owner') return `<div class="p-10 text-center text-red-500 text-xs">Access Denied</div>`;
+            
+            const orders = CloudDB.getOrders().filter(o => o.status === 'pending');
+            const reqs = CloudDB.getBalanceReqs().filter(r => r.status === 'pending');
+            const users = CloudDB.getUsers().filter(u => u.role !== 'owner');
+
+            return `
+            <div class="space-y-6 fade-in pb-24 max-w-2xl mx-auto">
+                <h2 class="text-2xl font-black text-white px-1">Admin Panel</h2>
+                
+                <div class="bg-gray-900 border border-gray-800 rounded-3xl p-5 shadow-lg">
+                    <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 border-b border-gray-800 pb-2">Pending Approvals & Key Delivery</h3>
+                    <div class="space-y-3">
+                        ${orders.length === 0 && reqs.length === 0 ? '<p class="text-xs text-gray-500">No pending orders or balance requests.</p>' : ''}
+                        
+                        ${orders.map(o => `
+                            <div class="bg-gray-950 border border-yellow-900/40 p-4 rounded-2xl space-y-2">
+                                <p class="text-xs font-bold text-yellow-400">Order: ${o.productName} (${o.plan}) [Via ${o.method.toUpperCase()}]</p>
+                                <p class="text-xs text-gray-300">User: <b class="text-white">${o.username}</b> (${o.roleAtPurchase}) | Amount: <b class="text-white">₹${o.price}</b></p>
+                                ${o.utr ? `<p class="text-[10px] font-mono text-gray-400">UTR: ${o.utr}</p>` : ''}
+                                
+                                <div class="pt-1">
+                                    <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Enter License Key to Deliver:</label>
+                                    <input type="text" id="key_input_${o.id}" placeholder="Type or paste license key here..." class="w-full bg-gray-900 border border-gray-800 rounded-xl px-3.5 py-2.5 text-xs text-green-400 font-mono focus:border-green-500 focus:outline-none mb-2">
+                                </div>
+
+                                <div class="flex gap-2">
+                                    <button onclick="approveOrderWithKey('${o.id}')" class="bg-green-600 hover:bg-green-500 text-white text-xs px-3.5 py-2.5 rounded-xl font-bold flex-1 shadow-md flex items-center justify-center gap-1.5"><i class="fas fa-check-circle"></i> Approve & Deliver Key</button>
+                                    <button onclick="rejectOrder('${o.id}')" class="bg-red-600 hover:bg-red-500 text-white text-xs px-3.5 py-2.5 rounded-xl font-bold flex-shrink-0 shadow-md">Reject</button>
+                                </div>
+                            </div>
+                        `).join('')}
+
+                        ${reqs.map(r => `
+                            <div class="bg-gray-950 border border-blue-900/40 p-3.5 rounded-2xl space-y-1.5">
+                                <p class="text-xs font-bold text-blue-400">Wallet Balance Request (${r.username})</p>
+                                <p class="text-xs text-gray-300">Amount: <b class="text-green-400">₹${r.amount}</b></p>
+                                <p class="text-[10px] font-mono text-gray-400">UTR: ${r.utr}</p>
+                                <div class="mt-2.5 flex gap-2">
+                                    <button onclick="approveBalance('${r.id}')" class="bg-green-600 hover:bg-green-500 text-white text-xs px-3 py-2 rounded-xl font-bold flex-1 shadow-md">Approve & Credit Balance</button>
+                                    <button onclick="rejectBalance('${r.id}')" class="bg-red-600 hover:bg-red-500 text-white text-xs px-3 py-2 rounded-xl font-bold flex-1 shadow-md">Reject</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <div class="bg-gray-900 border border-gray-800 rounded-3xl p-5 shadow-lg">
+                    <div class="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest">Manage Users & Resellers</h3>
+                        <button onclick="openCreateUserModal()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-xl text-xs font-bold transition-all shadow-md"><i class="fas fa-user-plus mr-1"></i> Create User</button>
+                    </div>
+                    <div class="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+                        ${users.map(u => `
+                            <div class="bg-gray-950 p-3.5 rounded-2xl flex items-center justify-between border border-gray-800">
+                                <div>
+                                    <p class="font-bold text-xs text-white">${u.username} <span class="text-[10px] text-gray-400 font-mono font-normal">(${u.password})</span></p>
+                                    <p class="text-[10px] text-gray-400 mt-0.5">Role: <span class="${u.role==='reseller'?'text-purple-400':'text-gray-300'} uppercase font-bold">${u.role}</span> | Bal: ₹${u.balance}</p>
+                                </div>
+                                <div class="flex gap-1.5">
+                                    <button onclick="toggleReseller('${u.id}')" class="bg-gray-900 border border-gray-700 text-white px-2.5 py-1.5 rounded-xl text-xs font-bold hover:bg-gray-800" title="Toggle Role">
+                                        <i class="fas fa-user-shield"></i>
+                                    </button>
+                                    <button onclick="editUserBalance('${u.id}')" class="bg-gray-900 border border-gray-700 text-white px-2.5 py-1.5 rounded-xl text-xs font-bold hover:bg-gray-800" title="Edit Balance">
+                                        <i class="fas fa-coins"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3.5">
+                    <div onclick="openUpiSettings()" class="bg-gray-900 border border-gray-800 p-4 rounded-2xl text-center active:bg-gray-800 cursor-pointer shadow-sm hover:border-gray-600 transition-colors">
+                        <i class="fas fa-cog text-gray-400 text-xl mb-1.5"></i>
+                        <p class="text-xs font-bold text-white">Store UPI Settings</p>
+                    </div>
+                    <div onclick="openProductsModal()" class="bg-gray-900 border border-gray-800 p-4 rounded-2xl text-center active:bg-gray-800 cursor-pointer shadow-sm hover:border-blue-500 transition-colors">
+                        <i class="fas fa-box-open text-blue-400 text-xl mb-1.5"></i>
+                        <p class="text-xs font-bold text-white">Edit Products & Stock</p>
+                    </div>
+                    <div onclick="openFilesModal()" class="bg-gray-900 border border-gray-800 p-4 rounded-2xl text-center active:bg-gray-800 cursor-pointer shadow-sm hover:border-green-500 transition-colors">
+                        <i class="fas fa-folder-plus text-green-400 text-xl mb-1.5"></i>
+                        <p class="text-xs font-bold text-white">Manage APK Files</p>
+                    </div>
+                    <div onclick="openSupportSettings()" class="bg-gray-900 border border-gray-800 p-4 rounded-2xl text-center active:bg-gray-800 cursor-pointer shadow-sm hover:border-pink-500 transition-colors">
+                        <i class="fas fa-headset text-pink-400 text-xl mb-1.5"></i>
+                        <p class="text-xs font-bold text-white">Edit Support Details</p>
+                    </div>
+                    <div onclick="openCouponsModal()" class="bg-gray-900 border border-gray-800 p-4 rounded-2xl text-center active:bg-gray-800 cursor-pointer shadow-sm hover:border-purple-500 transition-colors">
+                        <i class="fas fa-tags text-purple-400 text-xl mb-1.5"></i>
+                        <p class="text-xs font-bold text-white">Promo Coupons</p>
+                    </div>
+                    <div onclick="openAnnouncementsModal()" class="bg-gray-900 border border-gray-800 p-4 rounded-2xl text-center active:bg-gray-800 cursor-pointer shadow-sm hover:border-yellow-500 transition-colors">
+                        <i class="fas fa-bullhorn text-yellow-500 text-xl mb-1.5"></i>
+                        <p class="text-xs font-bold text-white">Announcements</p>
+                    </div>
+                </div>
+            </div>`;
+        };
+
+        const openCreateUserModal = () => {
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm"><i class="fas fa-user-plus text-blue-400 mr-2"></i> Create User Account</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Username</label>
+                        <input type="text" id="cu-name" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs focus:border-blue-500 focus:outline-none" placeholder="e.g. user_vip">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Password</label>
+                        <input type="text" id="cu-pass" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs focus:border-blue-500 focus:outline-none" placeholder="e.g. password123">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Account Role</label>
+                        <select id="cu-role" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs focus:border-blue-500 focus:outline-none">
+                            <option value="buyer">Buyer</option>
+                            <option value="reseller">Reseller</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Initial Balance (₹)</label>
+                        <input type="number" id="cu-bal" value="0" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs focus:border-blue-500 focus:outline-none">
+                    </div>
+                    <button onclick="saveCreatedUser()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg active:scale-95 transition-transform text-xs uppercase tracking-wider">Create Account</button>
+                </div>
+            `);
+        };
+
+        const saveCreatedUser = async () => {
+            const nameInput = document.getElementById('cu-name');
+            const passInput = document.getElementById('cu-pass');
+            const roleInput = document.getElementById('cu-role');
+            const balInput = document.getElementById('cu-bal');
+            if(!nameInput || !passInput) return;
+
+            const username = nameInput.value.trim();
+            const password = passInput.value.trim();
+            const role = roleInput ? roleInput.value : 'buyer';
+            const balance = parseInt(balInput ? balInput.value : 0) || 0;
+
+            if(!username || !password) return showToast('Username and password required', 'error');
+
+            const users = CloudDB.getUsers();
+            if(users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
+                return showToast('Username already exists', 'error');
+            }
+
+            users.push({ id: generateId(), username, password, role, balance });
+            await CloudDB.updateUsers(users);
+            closeModal();
+            showToast(`${role.toUpperCase()} account created successfully!`, 'success');
+        };
+
+        const approveOrderWithKey = async (id) => {
+            const keyInput = document.getElementById(`key_input_${id}`);
+            if(!keyInput) return;
+            const customKey = keyInput.value.trim();
+            if(!customKey) return showToast('Please enter the license key to deliver', 'error');
+
+            await CloudDB.updateOrder(id, { status: 'approved', key: customKey });
+            showToast('Order approved and license key delivered!', 'success');
+        };
+
+        const rejectOrder = async (id) => {
+            await CloudDB.updateOrder(id, { status: 'rejected', key: 'Rejected by Owner' });
+            showToast('Order Rejected', 'error');
+        };
+
+        const approveBalance = async (id) => {
+            const reqs = CloudDB.getBalanceReqs();
+            const req = reqs.find(r => r.id === id);
+            if(req && req.status === 'pending') {
+                await CloudDB.updateBalanceReq(id, { status: 'approved' });
+
+                const users = CloudDB.getUsers();
+                const uIdx = users.findIndex(u => u.id === req.userId);
+                if(uIdx > -1) {
+                    users[uIdx].balance += req.amount;
+                    await CloudDB.updateUsers(users);
+                }
+                showToast(`Credited ₹${req.amount} to ${req.username}`, 'success');
+            }
+        };
+
+        const rejectBalance = async (id) => {
+            await CloudDB.updateBalanceReq(id, { status: 'rejected' });
+            showToast('Balance Request Rejected', 'error');
+        };
+
+        const toggleReseller = async (userId) => {
+            const users = CloudDB.getUsers();
+            const u = users.find(x => x.id === userId);
+            if(u) {
+                u.role = u.role === 'buyer' ? 'reseller' : 'buyer';
+                await CloudDB.updateUsers(users);
+                showToast(`Role changed to ${u.role}`, 'success');
+            }
+        };
+
+        const editUserBalance = (userId) => {
+            const users = CloudDB.getUsers();
+            const u = users.find(x => x.id === userId);
+            if(!u) return;
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm">Edit Balance: ${u.username}</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <input type="number" id="new-bal-input" value="${u.balance}" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:border-blue-500 focus:outline-none text-xs">
+                    <button onclick="saveUserBalance('${u.id}')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg text-xs uppercase tracking-wider">Save Balance</button>
+                </div>
+            `);
+        };
+
+        const saveUserBalance = async (userId) => {
+            const valInput = document.getElementById('new-bal-input');
+            if(!valInput) return;
+            const val = valInput.value;
+            if(!val || isNaN(val)) return showToast('Invalid amount', 'error');
+            const users = CloudDB.getUsers();
+            const uIdx = users.findIndex(x => x.id === userId);
+            if(uIdx > -1) {
+                users[uIdx].balance = parseInt(val);
+                await CloudDB.updateUsers(users);
+                closeModal();
+                showToast('Balance updated', 'success');
+            }
+        };
+
+        const openUpiSettings = () => {
+            const settings = CloudDB.getSettings();
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm">Store Payment UPI Settings</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold uppercase tracking-wider block mb-1">UPI ID</label>
+                        <input type="text" id="new-upi-input" value="${settings.upiId}" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:border-blue-500 focus:outline-none text-xs">
+                    </div>
+                    <button onclick="saveUpiSettings()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg text-xs uppercase tracking-wider">Save UPI ID</button>
+                </div>
+            `);
+        };
+
+        const saveUpiSettings = async () => {
+            const valInput = document.getElementById('new-upi-input');
+            if(!valInput) return;
+            const val = valInput.value.trim();
+            if(!val) return showToast('UPI ID cannot be empty', 'error');
+            await CloudDB.updateSettings({ upiId: val });
+            closeModal();
+            showToast('UPI ID Updated Successfully', 'success');
+        };
+
+        const openAnnouncementsModal = () => {
+            const msgs = CloudDB.getAnnouncements();
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center sticky top-0 z-20">
+                    <h3 class="font-bold text-white text-sm"><i class="fas fa-bullhorn text-yellow-500 mr-2"></i> Manage Announcements</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+                    <div class="bg-gray-950 border border-gray-800 p-4 rounded-2xl space-y-3">
+                        <label class="text-[10px] font-bold text-yellow-400 block uppercase tracking-wider"><i class="fas fa-plus-circle mr-1"></i> Post Announcement</label>
+                        <textarea id="ann-msg-input" placeholder="Type broadcast message..." rows="3" class="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-white resize-none text-xs focus:border-yellow-500 focus:outline-none"></textarea>
+                        <button onclick="saveAnnouncement()" class="w-full bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-3 rounded-xl shadow-lg text-xs transition-all uppercase tracking-wider">Broadcast</button>
+                    </div>
+                    
+                    <div class="space-y-2 pt-2">
+                        <label class="text-[10px] font-bold text-gray-400 block uppercase tracking-wider">Existing (${msgs.length})</label>
+                        ${msgs.length === 0 ? '<p class="text-xs text-gray-500 py-2">No announcements found.</p>' : 
+                          msgs.map(m => `
+                            <div class="bg-gray-950 border border-gray-800 p-3.5 rounded-2xl flex items-start justify-between gap-3">
+                                <div class="space-y-1">
+                                    <p class="text-xs text-gray-300 leading-relaxed">${m.text}</p>
+                                    <span class="text-[10px] text-gray-500">${formatDate(m.date)}</span>
+                                </div>
+                                <button onclick="deleteAnnouncement('${m.id}')" class="text-red-500 hover:text-red-400 p-2 bg-gray-900 rounded-xl flex-shrink-0" title="Delete">
+                                    <i class="fas fa-trash text-xs"></i>
+                                </button>
+                            </div>
+                          `).join('')}
+                    </div>
+                </div>
+            `);
+        };
+
+        const saveAnnouncement = async () => {
+            const input = document.getElementById('ann-msg-input');
+            if(!input) return;
+            const msg = input.value.trim();
+            if(!msg) return showToast('Please enter a message', 'error');
+            const newAnn = { id: generateId(), text: msg, date: new Date().toISOString() };
+            await CloudDB.addAnnouncement(newAnn);
+            showToast('Announcement posted!', 'success');
+            openAnnouncementsModal();
+        };
+
+        const deleteAnnouncement = async (id) => {
+            await CloudDB.deleteAnnouncement(id);
+            showToast('Announcement deleted', 'success');
+            openAnnouncementsModal();
+        };
+
+        const openCouponsModal = () => {
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm">Create Promo Coupon</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold uppercase tracking-wider block mb-1">Coupon Code</label>
+                        <input type="text" id="coup-code-input" placeholder="e.g. VIP20" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white uppercase focus:border-purple-500 focus:outline-none text-xs font-bold">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold uppercase tracking-wider block mb-1">Discount Percentage (%)</label>
+                        <input type="number" id="coup-disc-input" placeholder="e.g. 20" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:border-purple-500 focus:outline-none text-xs">
+                    </div>
+                    <button onclick="saveCoupon()" class="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg text-xs uppercase tracking-wider">Create Coupon</button>
+                </div>
+            `);
+        };
+
+        const saveCoupon = async () => {
+            const codeInput = document.getElementById('coup-code-input');
+            const discInput = document.getElementById('coup-disc-input');
+            if(!codeInput || !discInput) return;
+            const code = codeInput.value.trim().toUpperCase();
+            const disc = discInput.value.trim();
+            if(!code || !disc || isNaN(disc)) return showToast('Please fill all details correctly', 'error');
+            const newCoup = { id: generateId(), code: code, discount: parseInt(disc) };
+            await CloudDB.addCoupon(newCoup);
+            closeModal();
+            showToast('Coupon Created Successfully!', 'success');
+        };
+
+        const openProductsModal = () => {
+            const products = CloudDB.getProducts();
+            let html = `
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center sticky top-0 z-20">
+                    <h3 class="font-bold text-white text-sm"><i class="fas fa-boxes text-blue-400 mr-2"></i> Custom Plans & Stock Management</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+                    <button onclick="openNewProductDialog()" class="w-full bg-gray-950 border-2 border-dashed border-gray-700 text-gray-400 hover:text-white hover:border-blue-500 py-3.5 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 text-xs">
+                        <i class="fas fa-plus-circle text-blue-400"></i> Add New Product
+                    </button>
+            `;
+
+            products.forEach((p, pIndex) => {
+                html += `<div class="bg-gray-950 border border-gray-800 p-4 rounded-2xl space-y-3">
+                            <div class="flex justify-between items-center">
+                                <h4 class="font-bold text-blue-400 text-xs"><i class="fas fa-cube mr-1"></i> ${p.name} <span class="text-[9px] text-gray-500 font-mono">(${p.category})</span></h4>
+                                <div class="flex gap-2">
+                                    <button onclick="openAddPlanModal('${p.id}')" class="text-[10px] bg-green-600 hover:bg-green-500 text-white px-2.5 py-1 rounded-xl font-bold">Add Plan</button>
+                                    <button onclick="deleteProduct('${p.id}')" class="text-red-400 hover:text-red-300 p-1 bg-gray-900 rounded-xl"><i class="fas fa-trash text-xs"></i></button>
+                                </div>
+                            </div>
+                            <div class="space-y-2">`;
+                p.plans.forEach((plan, planIndex) => {
+                    html += `
+                        <div class="bg-gray-900 p-3 rounded-xl border border-gray-800 space-y-2">
+                            <div class="flex justify-between items-center">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[10px] font-bold text-gray-300">Duration:</span>
+                                    <input type="text" id="p_${pIndex}_${planIndex}_duration" value="${plan.duration}" class="bg-gray-950 rounded-lg px-2.5 py-1 text-white border border-gray-800 text-xs w-28 font-bold outline-none">
+                                </div>
+                                <button onclick="deletePlan('${p.id}', ${planIndex})" class="text-red-400 text-[10px] hover:text-red-300 font-semibold"><i class="fas fa-times"></i> Remove</button>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 text-[10px] pt-1">
+                                <div><label class="text-gray-400 block mb-1">Buyer ₹</label><input type="number" id="p_${pIndex}_${planIndex}_price" value="${plan.price}" class="w-full bg-gray-950 rounded-lg px-2 py-1.5 text-white border border-gray-800 outline-none font-bold"></div>
+                                <div><label class="text-gray-400 block mb-1">Reseller ₹</label><input type="number" id="p_${pIndex}_${planIndex}_reseller" value="${plan.resellerPrice}" class="w-full bg-gray-950 rounded-lg px-2 py-1.5 text-white border border-gray-800 outline-none font-bold"></div>
+                                <div><label class="text-green-400 block mb-1 font-bold">Stock</label><input type="number" id="p_${pIndex}_${planIndex}_stock" value="${plan.stock}" class="w-full bg-gray-950 rounded-lg px-2 py-1.5 text-white border border-green-800 font-bold outline-none"></div>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div></div>`;
+            });
+
+            html += `</div>
+                <div class="p-4 border-t border-gray-800 bg-gray-900 rounded-b-3xl">
+                    <button onclick="saveProducts()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg text-xs uppercase tracking-wider">Save All Product Changes</button>
+                </div>
+            `;
+            openModal(html);
+        };
+
+        const openNewProductDialog = () => {
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm">Create New Product</h3>
+                    <button onclick="openProductsModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-arrow-left"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold uppercase tracking-wider block mb-1">Product Name</label>
+                        <input type="text" id="np-name" placeholder="e.g. Reaper X Pro" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:outline-none text-xs font-bold">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold uppercase tracking-wider block mb-1">Category</label>
+                        <select id="np-cat" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white focus:outline-none text-xs">
+                            <option value="android_root">Root Panel</option>
+                            <option value="android_non_root">Non Root Panel</option>
+                            <option value="ios">IOS Panel</option>
+                        </select>
+                    </div>
+                    <div class="border-t border-gray-800 pt-3">
+                        <label class="text-[10px] font-bold text-blue-400 block mb-2 uppercase tracking-wider">Initial Plan Setup</label>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="text-[10px] text-gray-400 block mb-1">Duration Title (e.g. 30 Days)</label>
+                                <input type="text" id="np-duration" value="30 Days" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-white text-xs font-bold focus:outline-none">
+                            </div>
+                            <div class="grid grid-cols-3 gap-2">
+                                <div><label class="text-[10px] text-gray-400 block mb-1">Buyer ₹</label><input type="number" id="np-price" value="799" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-2.5 py-2.5 text-white text-xs focus:outline-none"></div>
+                                <div><label class="text-[10px] text-gray-400 block mb-1">Reseller ₹</label><input type="number" id="np-reseller" value="650" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-2.5 py-2.5 text-white text-xs focus:outline-none"></div>
+                                <div><label class="text-[10px] text-gray-400 block mb-1">Stock</label><input type="number" id="np-stock" value="100" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-2.5 py-2.5 text-white text-xs focus:outline-none"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <button onclick="createNewProduct()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg mt-1 text-xs uppercase tracking-wider">Create Product</button>
+                </div>
+            `);
+        };
+
+        const createNewProduct = async () => {
+            const nameInput = document.getElementById('np-name');
+            const catInput = document.getElementById('np-cat');
+            const durInput = document.getElementById('np-duration');
+            const priceInput = document.getElementById('np-price');
+            const resellerInput = document.getElementById('np-reseller');
+            const stockInput = document.getElementById('np-stock');
+            if(!nameInput) return;
+
+            const name = nameInput.value.trim();
+            const cat = catInput ? catInput.value : 'android_root';
+            const duration = durInput ? durInput.value.trim() || '30 Days' : '30 Days';
+            const price = parseInt(priceInput ? priceInput.value : 799) || 799;
+            const resellerPrice = parseInt(resellerInput ? resellerInput.value : 650) || 650;
+            const stock = parseInt(stockInput ? stockInput.value : 100) || 100;
+
+            if(!name) return showToast('Product name is required', 'error');
+            
+            const products = CloudDB.getProducts();
+            products.unshift({
+                id: generateId(),
+                name: name,
+                category: cat,
+                plans: [{ duration, price, resellerPrice, stock }]
+            });
+            await CloudDB.updateProducts(products);
+            showToast('Product Created Successfully!', 'success');
+            openProductsModal();
+        };
+
+        const openAddPlanModal = (productId) => {
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm">Add Plan Duration</h3>
+                    <button onclick="openProductsModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-arrow-left"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold uppercase tracking-wider block mb-1">Duration Title (e.g. 7 Days)</label>
+                        <input type="text" id="ap-duration" placeholder="e.g. 7 Days" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs font-bold focus:outline-none">
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div><label class="text-[10px] text-gray-400 block mb-1">Buyer ₹</label><input type="number" id="ap-price" placeholder="349" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-2.5 py-3 text-white text-xs focus:outline-none"></div>
+                        <div><label class="text-[10px] text-gray-400 block mb-1">Reseller ₹</label><input type="number" id="ap-reseller" placeholder="280" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-2.5 py-3 text-white text-xs focus:outline-none"></div>
+                        <div><label class="text-[10px] text-gray-400 block mb-1">Stock</label><input type="number" id="ap-stock" value="100" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-2.5 py-3 text-white text-xs focus:outline-none"></div>
+                    </div>
+                    <button onclick="saveNewPlan('${productId}')" class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3.5 rounded-xl shadow-lg mt-1 text-xs uppercase tracking-wider">Add Plan</button>
+                </div>
+            `);
+        };
+
+        const saveNewPlan = async (productId) => {
+            const durInput = document.getElementById('ap-duration');
+            const priceInput = document.getElementById('ap-price');
+            const resellerInput = document.getElementById('ap-reseller');
+            const stockInput = document.getElementById('ap-stock');
+            if(!durInput) return;
+
+            const duration = durInput.value.trim();
+            const price = parseInt(priceInput.value);
+            const resellerPrice = parseInt(resellerInput.value);
+            const stock = parseInt(stockInput.value) || 100;
+
+            if(!duration || isNaN(price) || isNaN(resellerPrice)) return showToast('Please enter valid duration & prices', 'error');
+
+            const products = CloudDB.getProducts();
+            const pIdx = products.findIndex(p => p.id === productId);
+            if(pIdx > -1) {
+                products[pIdx].plans.push({ duration, price, resellerPrice, stock });
+                await CloudDB.updateProducts(products);
+                showToast('Plan added successfully!', 'success');
+                openProductsModal();
+            }
+        };
+
+        const deletePlan = async (productId, planIndex) => {
+            const products = CloudDB.getProducts();
+            const pIdx = products.findIndex(p => p.id === productId);
+            if(pIdx > -1) {
+                if(products[pIdx].plans.length <= 1) return showToast('Product must have at least one plan', 'error');
+                products[pIdx].plans.splice(planIndex, 1);
+                await CloudDB.updateProducts(products);
+                showToast('Plan removed', 'success');
+                openProductsModal();
+            }
+        };
+
+        const deleteProduct = async (id) => {
+            let products = CloudDB.getProducts();
+            products = products.filter(p => p.id !== id);
+            await CloudDB.updateProducts(products);
+            showToast('Product deleted', 'success');
+            openProductsModal();
+        };
+
+        const saveProducts = async () => {
+            const products = CloudDB.getProducts();
+            products.forEach((p, pIndex) => {
+                p.plans.forEach((plan, planIndex) => {
+                    const durationInput = document.getElementById(`p_${pIndex}_${planIndex}_duration`);
+                    const priceInput = document.getElementById(`p_${pIndex}_${planIndex}_price`);
+                    const resellerInput = document.getElementById(`p_${pIndex}_${planIndex}_reseller`);
+                    const stockInput = document.getElementById(`p_${pIndex}_${planIndex}_stock`);
+                    
+                    if(durationInput && durationInput.value.trim()) products[pIndex].plans[planIndex].duration = durationInput.value.trim();
+                    if(priceInput && !isNaN(priceInput.value)) products[pIndex].plans[planIndex].price = parseInt(priceInput.value);
+                    if(resellerInput && !isNaN(resellerInput.value)) products[pIndex].plans[planIndex].resellerPrice = parseInt(resellerInput.value);
+                    if(stockInput && !isNaN(stockInput.value)) products[pIndex].plans[planIndex].stock = parseInt(stockInput.value);
+                });
+            });
+            await CloudDB.updateProducts(products);
+            closeModal();
+            showToast('Products updated successfully!', 'success');
+        };
+
+        const openFilesModal = () => {
+            const files = CloudDB.getFiles();
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm">Manage APK Files</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div class="bg-gray-950 border border-gray-800 p-4 rounded-2xl space-y-3">
+                        <h4 class="text-[10px] font-bold text-green-400 uppercase tracking-wider"><i class="fas fa-plus-circle mr-1"></i> Add New File</h4>
+                        <input type="text" id="new-f-name" placeholder="File Name (e.g. Config v2)" class="w-full bg-gray-900 border border-gray-800 rounded-xl px-3.5 py-2.5 text-white text-xs focus:outline-none">
+                        <input type="text" id="new-f-ver" placeholder="Version (e.g. 1.5)" class="w-full bg-gray-900 border border-gray-800 rounded-xl px-3.5 py-2.5 text-white text-xs focus:outline-none">
+                        <input type="url" id="new-f-link" placeholder="Download Link" class="w-full bg-gray-900 border border-gray-800 rounded-xl px-3.5 py-2.5 text-white text-xs focus:outline-none">
+                        <button onclick="addNewFile()" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs w-full shadow-md uppercase tracking-wider">Publish File</button>
+                    </div>
+                    <div class="space-y-2 max-h-48 overflow-y-auto">
+                        ${files.map(f => `
+                            <div class="flex justify-between items-center bg-gray-950 border border-gray-800 p-3 rounded-xl">
+                                <div><p class="text-xs text-white font-bold">${f.name}</p><p class="text-[10px] text-gray-500">Ver: ${f.version}</p></div>
+                                <button onclick="deleteFile('${f.id}')" class="text-red-400 p-2 bg-gray-900 rounded-xl"><i class="fas fa-trash text-xs"></i></button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `);
+        };
+
+        const addNewFile = async () => {
+            const nameInput = document.getElementById('new-f-name');
+            const verInput = document.getElementById('new-f-ver');
+            const linkInput = document.getElementById('new-f-link');
+            if(!nameInput || !linkInput) return;
+
+            const name = nameInput.value.trim();
+            const version = verInput ? verInput.value.trim() : '1.0';
+            const link = linkInput.value.trim();
+            if(!name || !link) return showToast('Name and Link required', 'error');
+
+            const newFile = { id: generateId(), name, version: version || '1.0', link };
+            await CloudDB.addFile(newFile);
+            showToast('File Published!', 'success');
+            openFilesModal();
+        };
+
+        const deleteFile = async (id) => {
+            await CloudDB.deleteFile(id);
+            showToast('File Deleted', 'success');
+            openFilesModal();
+        };
+
+        const openSupportSettings = () => {
+            const support = CloudDB.getSupport();
+            openModal(`
+                <div class="p-4 border-b border-gray-800 bg-gray-900 rounded-t-3xl flex justify-between items-center">
+                    <h3 class="font-bold text-white text-sm">Edit Support Details</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Telegram Username</label>
+                        <input type="text" id="sup-tg" value="${support.telegram}" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">WhatsApp Number</label>
+                        <input type="text" id="sup-wa" value="${support.whatsapp}" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Support Notice / Message</label>
+                        <textarea id="sup-msg" rows="3" class="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-white text-xs focus:outline-none resize-none">${support.message}</textarea>
+                    </div>
+                    <button onclick="saveSupport()" class="w-full bg-pink-600 hover:bg-pink-500 text-white font-bold py-3.5 rounded-xl shadow-lg text-xs uppercase tracking-wider">Save Support Details</button>
+                </div>
+            `);
+        };
+
+        const saveSupport = async () => {
+            const tg = document.getElementById('sup-tg').value;
+            const wa = document.getElementById('sup-wa').value;
+            const msg = document.getElementById('sup-msg').value;
+            await CloudDB.updateSupport({ telegram: tg, whatsapp: wa, message: msg });
+            closeModal();
+            showToast('Support details saved!', 'success');
+        };
+
+        const renderAppFrame = () => {
+            return `
+                <div class="flex-1 overflow-y-auto p-4 md:p-6 pb-24" id="main-content"></div>
+                <div class="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 z-40">
+                    <div class="flex justify-around items-center h-16 max-w-md mx-auto">
+                        <button onclick="setTab('store')" class="flex flex-col items-center justify-center w-16 h-full text-gray-400 hover:text-white ${currentTab==='store'?'text-blue-500 font-bold':''}">
+                            <i class="fas fa-store text-lg mb-1"></i><span class="text-[10px]">Store</span>
+                        </button>
+                        <button onclick="setTab('history')" class="flex flex-col items-center justify-center w-16 h-full text-gray-400 hover:text-white ${currentTab==='history'?'text-blue-500 font-bold':''}">
+                            <i class="fas fa-history text-lg mb-1"></i><span class="text-[10px]">History</span>
+                        </button>
+                        <button onclick="setTab('files')" class="flex flex-col items-center justify-center w-16 h-full text-gray-400 hover:text-white ${currentTab==='files'?'text-blue-500 font-bold':''}">
+                            <i class="fas fa-folder-open text-lg mb-1"></i><span class="text-[10px]">Files</span>
+                        </button>
+                        <button onclick="setTab('account')" class="flex flex-col items-center justify-center w-16 h-full text-gray-400 hover:text-white ${currentTab==='account'?'text-blue-500 font-bold':''}">
+                            <i class="fas fa-user-circle text-lg mb-1"></i><span class="text-[10px]">Account</span>
+                        </button>
+                        ${currentUser && currentUser.role === 'owner' ? `
+                        <button onclick="setTab('admin')" class="flex flex-col items-center justify-center w-16 h-full text-gray-400 hover:text-white ${currentTab==='admin'?'text-blue-500 font-bold':''}">
+                            <i class="fas fa-shield-alt text-lg mb-1"></i><span class="text-[10px]">Admin</span>
+                        </button>` : ''}
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderLoginScreen = () => {
+            const support = CloudDB.getSupport();
+            return `
+                <div class="flex-1 flex items-center justify-center p-4 bg-gray-950 fade-in overflow-y-auto">
+                    <div class="bg-gray-900 p-8 rounded-3xl border border-gray-800 shadow-2xl w-full max-w-sm my-auto">
+                        <div class="text-center mb-6">
+                            <div class="w-16 h-16 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-blue-500/30 mb-4 transform rotate-6">
+                                <i class="fas fa-key text-white text-2xl transform -rotate-6"></i>
+                            </div>
+                            <h1 class="text-2xl font-black text-white tracking-tight">UNION STORE</h1>
+                            <p class="text-[11px] text-gray-500 mt-1 font-medium">Realtime Cloud Game Licenses</p>
+                        </div>
+                        
+                        <form onsubmit="login(event)" class="space-y-3.5">
+                            <div class="relative">
+                                <i class="fas fa-user absolute left-4 top-3.5 text-gray-500 text-xs"></i>
+                                <input type="text" id="login-user" required placeholder="Username" class="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-4 py-3 text-xs text-white focus:border-blue-500 focus:outline-none">
+                            </div>
+                            <div class="relative">
+                                <i class="fas fa-lock absolute left-4 top-3.5 text-gray-500 text-xs"></i>
+                                <input type="password" id="login-pass" required placeholder="Password" class="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-4 py-3 text-xs text-white focus:border-blue-500 focus:outline-none">
+                            </div>
+                            <div class="text-right">
+                                <button type="button" onclick="showForgotPasswordModal()" class="text-[11px] text-blue-400 hover:underline">Forgot Password?</button>
+                            </div>
+                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg active:scale-95 transition-transform text-xs uppercase tracking-wider">Sign In</button>
+                        </form>
+
+                        <div class="mt-5 pt-4 border-t border-gray-800">
+                            <p class="text-[10px] text-gray-400 text-center mb-2 font-medium">Need Assistance? Contact Support</p>
+                            <div class="flex gap-2">
+                                <a href="https://t.me/${support.telegram.replace('@', '')}" target="_blank" class="flex-1 bg-gray-950 border border-gray-800 hover:border-blue-500 text-blue-400 py-2.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors">
+                                    <i class="fab fa-telegram text-xs"></i> Telegram
+                                </a>
+                                <a href="https://wa.me/${support.whatsapp.replace(/[^0-9]/g, '')}" target="_blank" class="flex-1 bg-gray-950 border border-gray-800 hover:border-green-500 text-green-400 py-2.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors">
+                                    <i class="fab fa-whatsapp text-xs"></i> WhatsApp
+                                </a>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-5 pt-4 border-t border-gray-800">
+                            <p class="text-[11px] text-gray-500 text-center mb-2 font-medium">Create New Account</p>
+                            <form onsubmit="register(event)" class="flex gap-2">
+                                <input type="text" id="reg-user" required placeholder="Username" class="w-1/2 bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none">
+                                <input type="password" id="reg-pass" required placeholder="Password" class="w-1/2 bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none">
+                                <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-white rounded-xl px-3.5 py-2.5 text-xs font-bold">Join</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const render = () => {
+            const container = document.getElementById('app-container');
+            if(!container) return;
+            if (!currentUser) {
+                container.innerHTML = renderLoginScreen();
+            } else {
+                refreshUserData();
+                if(!document.getElementById('main-content')) {
+                    container.innerHTML = renderAppFrame();
+                }
+                const main = document.getElementById('main-content');
+                if(main) {
+                    if(currentTab === 'store') main.innerHTML = renderStore();
+                    else if(currentTab === 'history') main.innerHTML = renderHistory();
+                    else if(currentTab === 'files') main.innerHTML = renderFiles();
+                    else if(currentTab === 'account') main.innerHTML = renderAccount();
+                    else if(currentTab === 'admin') main.innerHTML = renderAdmin();
+                }
+            }
+        };
+
+        window.onload = function() {
+            if (!currentTab) currentTab = 'store';
+            render();
+        };
+    </script>
+</body>
+</html>
